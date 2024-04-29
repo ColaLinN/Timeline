@@ -65,6 +65,7 @@ function processTweets() {
 	});
 }
 
+
 function isElementInViewport(el) {
 	const rect = el.getBoundingClientRect();
 	return (
@@ -76,38 +77,66 @@ function isElementInViewport(el) {
 			(window.innerWidth || document.documentElement.clientWidth)
 	);
 }
-function saveTweet(
-	userName,
-	tweetBody,
-	userId,
-	tweetUrl,
-	tweetTime,
-	tweetImages
-) {
-	console.log("saving tweet");
 
-	chrome.storage.local.get("tweets", function (data) {
-		let tweets = data.tweets || [];
-		let tweet = {
-			userName: userName,
-			tweetBody: tweetBody,
-			userId: userId,
-			tweetUrl: tweetUrl,
-			tweetTime: tweetTime,
-			tweetImages: tweetImages,
-			captureDate: new Date().toISOString(),
-		};
+let isLocked = false;  // 锁标志
 
-		if (!tweets.some((t) => t.tweetUrl === tweetUrl)) {
-			if (tweets.length >= _maxSaveNumber) {
-				tweets.shift();
-			}
-			// push the new tweet
-			tweets.push(tweet);
-		}
+// 等待解锁的函数
+async function waitForUnlock() {
+    while (isLocked) {
+        await new Promise(resolve => setTimeout(resolve, 100));  // 暂停100毫秒后继续检查锁状态
+    }
+}
 
-		chrome.storage.local.set({ tweets: tweets });
-	});
+// 使用锁的函数
+async function saveTweet(userName, tweetBody, userId, tweetUrl, tweetTime, tweetImages, engaged) {
+    await waitForUnlock();  // 等待锁被释放
+    isLocked = true;  // 获取锁
+    console.log("saving tweet");
+
+    try {
+        const result = await new Promise((resolve, reject) => {
+            chrome.storage.local.get("tweets", data => {
+                if (chrome.runtime.lastError) {
+                    reject(chrome.runtime.lastError);
+                } else {
+                    resolve(data);
+                }
+            });
+        });
+
+        let tweets = result.tweets || [];
+        const tweet = {
+            userName: userName,
+            tweetBody: tweetBody,
+            userId: userId,
+            tweetUrl: tweetUrl,
+            tweetTime: tweetTime,
+            tweetImages: tweetImages,
+            captureDate: new Date().toISOString(),
+            engaged: engaged,
+        };
+
+        if (!tweets.some(t => t.tweetUrl === tweetUrl)) {
+            if (tweets.length >= _maxSaveNumber) {
+                tweets.shift();
+            }
+            tweets.push(tweet);
+        }
+
+        await new Promise((resolve, reject) => {
+            chrome.storage.local.set({ tweets: tweets }, () => {
+                if (chrome.runtime.lastError) {
+                    reject(chrome.runtime.lastError);
+                } else {
+                    resolve();
+                }
+            });
+        });
+    } catch (error) {
+        console.error("Failed to save tweet:", error);
+    } finally {
+        isLocked = false;  // 释放锁
+    }
 }
 
 function main() {
@@ -126,6 +155,7 @@ function main() {
 	}
 
 	window.onload = function () {
+		setInterval(processTweets, 500);
 		const targetNode = document.querySelector("#react-root");
 
 		if (targetNode) {

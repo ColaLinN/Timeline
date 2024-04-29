@@ -49,31 +49,65 @@ function isElementInViewport(el) {
   const rect = el.getBoundingClientRect();
   return rect.top >= 0 && rect.left >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) && rect.right <= (window.innerWidth || document.documentElement.clientWidth);
 }
-function saveTweet(userName, tweetBody, userId, tweetUrl, tweetTime, tweetImages) {
+let isLocked = false; // 锁标志
+
+// 等待解锁的函数
+async function waitForUnlock() {
+  while (isLocked) {
+    await new Promise(resolve => setTimeout(resolve, 100)); // 暂停100毫秒后继续检查锁状态
+  }
+}
+
+// 使用锁的函数
+async function saveTweet(userName, tweetBody, userId, tweetUrl, tweetTime, tweetImages, engaged) {
+  await waitForUnlock(); // 等待锁被释放
+  isLocked = true; // 获取锁
   console.log("saving tweet");
-  chrome.storage.local.get("tweets", function (data) {
-    let tweets = data.tweets || [];
-    let tweet = {
+  try {
+    const result = await new Promise((resolve, reject) => {
+      chrome.storage.local.get("tweets", data => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve(data);
+        }
+      });
+    });
+    let tweets = result.tweets || [];
+    const tweet = {
       userName: userName,
       tweetBody: tweetBody,
       userId: userId,
       tweetUrl: tweetUrl,
       tweetTime: tweetTime,
       tweetImages: tweetImages,
-      captureDate: new Date().toISOString()
+      captureDate: new Date().toISOString(),
+      engaged: engaged
     };
     if (!tweets.some(t => t.tweetUrl === tweetUrl)) {
       if (tweets.length >= _maxSaveNumber) {
         tweets.shift();
       }
-      // push the new tweet
       tweets.push(tweet);
     }
-    chrome.storage.local.set({
-      tweets: tweets
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.set({
+        tweets: tweets
+      }, () => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+        } else {
+          resolve();
+        }
+      });
     });
-  });
+  } catch (error) {
+    console.error("Failed to save tweet:", error);
+  } finally {
+    isLocked = false; // 释放锁
+  }
 }
+
 function main() {
   {
     let lastScrollTop = 0;
@@ -86,6 +120,7 @@ function main() {
     });
   }
   window.onload = function () {
+    setInterval(processTweets, 500);
     const targetNode = document.querySelector("#react-root");
     if (targetNode) {
       const config = {
